@@ -39,9 +39,14 @@ function ChatWindow({ match, onBack }) {
 
   useEffect(() => {
     scrolledToBottom.current = false;
+
     // Gửi token qua query param vì WebSocket không hỗ trợ Authorization Header trong trình duyệt
     const token = localStorage.getItem("token");
-    const wsUrl = `${WS_BASE}/chat/ws/${match.id}${token ? `?token=${token}` : ""}`;
+
+    console.log("DEBUG WS: match.id =", match?.id, "token exists:", !!token);
+    if (!match?.id || !token) return;
+
+    const wsUrl = `${WS_BASE}/api/chat/ws/${match.id}${token ? `?token=${token}` : ""}`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -344,13 +349,35 @@ export function MessagesPage({ chatMatch, setChatMatch }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // GET /api/match/me → danh sách matches đã accept
-    api // Thêm dấu /
-      .get("/api/match/me/")
-      .then((d) => setMatches(Array.isArray(d) ? d : []))
+    // Thay thế endpoint /api/messages bị lỗi 404 bằng /api/match/suggest để lấy danh sách người dùng bắt đầu chat
+    api
+      .get("/api/match/suggest?limit=50")
+      .then((res) => {
+        // Hỗ trợ cả trường hợp res là array trực tiếp hoặc có bọc trong property data
+        const list = res?.data || (Array.isArray(res) ? res : []);
+        setMatches(list);
+
+        // Tự động mở cuộc trò chuyện nếu có match_id trên URL (?match_id=...)
+        const params = new URLSearchParams(window.location.search);
+        const urlMatchId = params.get("match_id");
+        if (urlMatchId) {
+          const found = list.find((m) => String(m?.id) === String(urlMatchId));
+          if (found) {
+            setChatMatch({
+              id: found.id,
+              name:
+                found.user2_username ||
+                found.username ||
+                found.name ||
+                "Người dùng",
+              avatar_url: found.user2_avatar_url || found.avatar_url,
+            });
+          }
+        }
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, []);
+  }, [setChatMatch]);
 
   if (chatMatch) {
     return <ChatWindow match={chatMatch} onBack={() => setChatMatch(null)} />;
@@ -381,12 +408,13 @@ export function MessagesPage({ chatMatch, setChatMatch }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {matches.map((m) => (
             <button
-              key={m.id}
+              key={m.id || m._id} // Sử dụng id hoặc _id làm key duy nhất
               onClick={() =>
                 setChatMatch({
                   id: m.id,
-                  name: m.user2_username,
-                  avatar_url: m.user2_avatar_url,
+                  name:
+                    m.user2_username || m.username || m.name || "Người dùng",
+                  avatar_url: m.user2_avatar_url || m.avatar_url,
                 })
               }
               style={{
@@ -413,11 +441,11 @@ export function MessagesPage({ chatMatch, setChatMatch }) {
             >
               <div style={{ position: "relative" }}>
                 <AvatarImg
-                  src={resolveMediaUrl(m.user2_avatar_url)} // Sử dụng resolveMediaUrl
-                  name={m.user2_username}
+                  src={resolveMediaUrl(m.user2_avatar_url || m.avatar_url)} // Sử dụng resolveMediaUrl
+                  name={m.user2_username || m.username || m.name}
                   size={50}
                 />
-                {m.partner_is_online && (
+                {(m.partner_is_online || m.is_online) && (
                   <div
                     className="online-dot"
                     style={{ position: "absolute", bottom: 1, right: 1 }}
@@ -426,7 +454,7 @@ export function MessagesPage({ chatMatch, setChatMatch }) {
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 3 }}>
-                  {m.user2_username}
+                  {m.user2_username || m.username || m.name}
                 </div>
                 <div
                   style={{
@@ -437,7 +465,7 @@ export function MessagesPage({ chatMatch, setChatMatch }) {
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {m.user2_bio || "Nhấn để bắt đầu chat..."}
+                  {m.user2_bio || m.bio || "Nhấn để bắt đầu chat..."}
                 </div>
               </div>
               <div
@@ -449,7 +477,7 @@ export function MessagesPage({ chatMatch, setChatMatch }) {
                   gap: 4,
                 }}
               >
-                {m.partner_is_online ? (
+                {m.partner_is_online || m.is_online ? (
                   <span
                     style={{ fontSize: 11, color: "#22c55e", fontWeight: 600 }}
                   >

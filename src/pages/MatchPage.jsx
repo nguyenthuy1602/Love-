@@ -1,5 +1,6 @@
 // src/pages/MatchPage.jsx
 import { useState, useEffect, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { api, BASE_URL } from "../api";
 import { useAuth } from "../AuthContext";
 import { useToast } from "../ToastContext";
@@ -44,6 +45,7 @@ function SentimentBadge({ score }) {
 }
 
 export function MatchPage({ openUserProfile }) {
+  const navigate = useNavigate();
   const { user: currentUser } = useAuth();
   const toast = useToast();
   const [suggestedMatches, setSuggestedMatches] = useState([]);
@@ -298,11 +300,20 @@ export function MatchPage({ openUserProfile }) {
                 </button>
                 <button
                   className="btn btn-primary btn-sm"
-                  onClick={() => handleAction("like", match.id)}
+                  onClick={async () => {
+                    setActionLoading(true);
+                    try {
+                      await api.post(`/api/chat/start/${match.id}`);
+                      navigate(`/messages/${match.id}`);
+                    } catch (err) {
+                      toast(err.message, "error");
+                      setActionLoading(false);
+                    }
+                  }}
                   disabled={actionLoading}
                   style={{ flex: 1 }}
                 >
-                  ❤️ Thích
+                  ❤️ Nhắn tin
                 </button>
               </div>
               <button

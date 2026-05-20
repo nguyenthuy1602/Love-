@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react';
-import { WS_BASE } from './api';
+import { useEffect, useRef } from "react";
+import { WS_BASE } from "./api";
 
 export function useNotifications(user, onNotification) {
   const wsRef = useRef(null);
@@ -12,18 +12,20 @@ export function useNotifications(user, onNotification) {
 
     const connect = () => {
       if (!active) return;
-      const ws = new WebSocket(`${WS_BASE}/chat/notifications`);
+      const ws = new WebSocket(`${WS_BASE}/api/chat/notifications`); // Đã sửa URL và loại bỏ dòng trùng lặp
       wsRef.current = ws;
 
       ws.onopen = () => {
         timerRef.current = setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) ws.send('ping');
+          if (ws.readyState === WebSocket.OPEN) ws.send("ping");
         }, 25000);
       };
 
       ws.onmessage = (e) => {
-        if (e.data === 'pong') return;
-        try { onNotification(JSON.parse(e.data)); } catch {}
+        if (e.data === "pong") return;
+        try {
+          onNotification(JSON.parse(e.data));
+        } catch {}
       };
 
       ws.onclose = () => {

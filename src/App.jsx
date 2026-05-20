@@ -1,5 +1,6 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useAuth } from "./AuthContext";
+import { BrowserRouter } from "react-router-dom";
 import { useToast } from "./ToastContext";
 import { useNotifications } from "./useNotifications";
 import { Sidebar } from "./Sidebar";
@@ -45,6 +46,17 @@ function AppInner() {
 
   // Luôn gọi Hook ở cấp cao nhất
   useNotifications(user, handleNotif);
+
+  // Đồng bộ tab "Tin nhắn" nếu URL có chứa match_id (khi dùng navigate từ trang khác)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const isMessagesPath = window.location.pathname.includes("messages");
+    const hasMatchId = params.get("match_id");
+
+    if (isMessagesPath || hasMatchId) {
+      setPage("messages");
+    }
+  }, []);
 
   if (loading) {
     return (
@@ -141,5 +153,9 @@ function AppInner() {
 }
 
 export default function App() {
-  return <AppInner />;
+  return (
+    <BrowserRouter>
+      <AppInner />
+    </BrowserRouter>
+  );
 }

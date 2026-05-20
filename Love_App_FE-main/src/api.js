@@ -1,12 +1,22 @@
 const IS_DEV = Boolean(import.meta?.env?.DEV);
-export const BASE_URL = IS_DEV ? "" : "https://love-app-igja.onrender.com";
-export const WS_BASE = IS_DEV ? "" : "wss://love-app-igja.onrender.com";
+export const BASE_URL = IS_DEV
+  ? "http://127.0.0.1:8000"
+  : "https://love-app-igja.onrender.com";
+export const WS_BASE = IS_DEV
+  ? "ws://127.0.0.1:8000"
+  : "wss://love-app-igja.onrender.com";
 
 const req = (method, path, body, isForm = false) => {
-  const url = `${BASE_URL}${path}`;
+  // Đảm bảo URL luôn chính xác, không bị dính chữ hoặc thừa dấu /
+  const safePath = path.startsWith("/") ? path : `/${path}`;
+  const url = `${BASE_URL.replace(/\/$/, "")}${safePath}`;
+
   const opts = { method, credentials: "include" };
-  if (body && !isForm) {
-    opts.headers = { "Content-Type": "application/json" };
+  if (body !== undefined && body !== null && !isForm) {
+    opts.headers = {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    };
     opts.body = JSON.stringify(body);
   } else if (body && isForm) {
     opts.body = body;
@@ -16,6 +26,7 @@ const req = (method, path, body, isForm = false) => {
     console.info("[api:req]", {
       method,
       path,
+      body, // Log body để kiểm tra payload thực tế gửi lên /match/like
       contentType: isForm ? "multipart/form-data" : "application/json",
     });
   }
@@ -38,6 +49,14 @@ const req = (method, path, body, isForm = false) => {
 
       if (typeof data === "object" && data !== null) {
         errorMsg = data.detail || data.message || JSON.stringify(data);
+        // Xử lý lỗi 422 của FastAPI: detail thường là mảng các lỗi validation
+        if (Array.isArray(data.detail)) {
+          errorMsg = data.detail
+            .map((e) => `${e.loc.join(".")}: ${e.msg}`)
+            .join(", ");
+        } else {
+          errorMsg = data.detail || data.message || JSON.stringify(data);
+        }
       } else if (typeof data === "string") {
         errorMsg = data;
       }

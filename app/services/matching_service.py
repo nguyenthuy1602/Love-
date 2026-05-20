@@ -9,8 +9,6 @@ import logging
 from datetime import datetime, timezone
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from fastapi.encoders import jsonable_encoder # New import for safe serialization
-import traceback # New import for full traceback
 
 from app.schemas.match import MatchResponse, MatchStatus
 from app.core.connection_manager import manager
@@ -18,23 +16,26 @@ from app.core.connection_manager import manager
 logger = logging.getLogger(__name__)
 
 
-def _serialize_match(match_doc: dict) -> dict:
-    partner_id = str(match_doc.get("user2_id", ""))
-    return {
-        "id": str(match_doc["_id"]),
-        "user1_id": str(match_doc["user1_id"]),
-        "user2_id": partner_id,
-        "user1_username": match_doc.get("user1_username", ""),
-        "user2_username": match_doc.get("user2_username", ""),
-        "user2_bio": match_doc.get("user2_bio"),
-        "user2_avatar_url": match_doc.get("user2_avatar_url"),
-        "user2_sentiment": match_doc.get("user2_sentiment"),
-        "user2_gender": match_doc.get("user2_gender"),
-        "user2_age": match_doc.get("user2_age"),
-        "partner_is_online": manager.is_online(partner_id), # Kiểm tra trạng thái online thật
-        "status": match_doc.get("status", "pending"),
-        "created_at": match_doc["created_at"],
-    }
+def _serialize_match(doc: dict) -> MatchResponse:
+    partner_id = str(doc.get("user2_id", ""))
+    return MatchResponse(
+        id=partner_id, # Trả về user_id của đối phương làm id chính để FE gọi chat
+        name=doc.get("user2_username", ""),
+        avatar_url=doc.get("user2_avatar_url", ""),
+        bio=doc.get("user2_bio", ""),
+        user1_id=str(doc["user1_id"]),
+        user2_id=partner_id,
+        user1_username=doc.get("user1_username", ""),
+        user2_username=doc.get("user2_username", ""),
+        user2_bio=doc.get("user2_bio"),
+        user2_avatar_url=doc.get("user2_avatar_url"),
+        user2_sentiment=doc.get("user2_sentiment"),
+        user2_gender=doc.get("user2_gender"),
+        user2_age=doc.get("user2_age"),
+        partner_is_online=manager.is_online(partner_id),
+        status=doc["status"],
+        created_at=doc["created_at"],
+    )
 
 
 async def _get_excluded_user_ids(
@@ -69,13 +70,12 @@ async def _create_match_doc(
     user1_id: str,
     user1_username: str,
     target_user: dict,
-) -> dict:
-    # Ensure target_user fields have defaults to prevent KeyError or None issues
+) -> MatchResponse:
     doc = {
         "user1_id": ObjectId(user1_id),
         "user1_username": user1_username,
         "user2_id": target_user["_id"],
-        "user2_username": target_user.get("username", "Người dùng"),
+        "user2_username": target_user["username"],
         "user2_bio": target_user.get("bio"),
         "user2_avatar_url": target_user.get("avatar_url"),
         "user2_sentiment": target_user.get("sentiment_profile"),
@@ -85,175 +85,147 @@ async def _create_match_doc(
         "created_at": datetime.now(timezone.utc),
     }
     result = await db.matches.insert_one(doc)
-    
-    return {
-        "id": str(result.inserted_id),
-        "user1_id": user1_id,
-        "user2_id": str(target_user["_id"]),
-        "user1_username": user1_username,
-        "user2_username": target_user.get("username", ""),
-        "user2_bio": target_user.get("bio"),
-        "user2_avatar_url": target_user.get("avatar_url"),
-        "user2_sentiment": target_user.get("sentiment_profile"),
-        "user2_gender": target_user.get("gender"),
-        "user2_age": target_user.get("age"),
-        "partner_is_online": False,
-        "status": "pending",
-        "created_at": doc["created_at"], # Use the created_at from the inserted doc
-    } # This return structure is for the _create_match_doc helper, not for the API response directly
+    doc["_id"] = result.inserted_id
+    return _serialize_match(doc)
 
-
-# Import the core logic from the new file
-from app.services.match_suggest_core_logic import suggest_by_sentiment_core
 
 async def suggest_by_sentiment(
     db: AsyncIOMotorDatabase, user_id: str, limit: int = 10
-) -> list[dict]:
+) -> list[MatchResponse]:
     """
-    GET /api/match/suggest: Chỉ trả về danh sách user để xem, KHÔNG tạo match trong DB.
+    Gợi ý ghép đôi dựa trên sentiment_profile (Epic 3 Upgrade).
+    Logic:
+    - negative: ưu tiên ["negative", "positive"]
+    - positive: ưu tiên ["positive"]
+    - neutral: match ["neutral", "positive", "negative"]
     """
-    try:
-        candidates = await suggest_by_sentiment_core(db, user_id, limit)
-
-        results = []
-        for target in candidates:
-            results.append({
-                "_id": str(target["_id"]),
-                "username": target.get("username", ""),
-                "avatar_url": target.get("avatar_url"),
-                "bio": target.get("bio", ""),
-                "age": target.get("age"),
-                "gender": target.get("gender"),
-            })
-
-        return jsonable_encoder(results)
-        
-    except Exception as e:
-        logger.error(f"MATCH SUGGEST ERROR: {e}")
-        traceback.print_exc()
-        return [] # Return empty list as per requirement
-
-
-async def suggest_random(
-    db: AsyncIOMotorDatabase, user_id: str, limit: int = 10
-) -> list[dict]: # Changed return type hint to dict for DiscoverUserResponse
     oid = ObjectId(user_id)
+    me = await db.users.find_one({"_id": oid})
+    if not me:
+        raise ValueError("User not found")
+
+    # 1. Xác định sentiment hiện tại (fallback về neutral nếu chưa có)
+    my_sentiment = me.get("sentiment_profile") or "neutral"
+    logger.info(f"[MATCH] Current user sentiment: {my_sentiment}")
+
+    # 2. Thiết lập bộ lọc (Chỉ exclude chính mình để debug dễ dàng hơn)
     match_filter = {"_id": {"$ne": oid}}
+
+    if my_sentiment == "negative":
+        match_filter["sentiment_profile"] = {"$in": ["negative", "positive"]}
+    elif my_sentiment == "positive":
+        match_filter["sentiment_profile"] = "positive"
+    else:  # neutral
+        match_filter["sentiment_profile"] = {"$in": ["neutral", "positive", "negative"]}
 
     pipeline = [
         {"$match": match_filter},
         {"$sample": {"size": limit}}
     ]
+
+    logger.info(f"[MATCH DEBUG] Current Sentiment: {my_sentiment}")
+    logger.info(f"[MATCH DEBUG] Mongo Query (Sentiment): {pipeline}")
+
+    cursor = db.users.aggregate(pipeline)
+    final_candidates = await cursor.to_list(length=limit)
+
+    # 3. Fallback: Nếu không tìm thấy ai theo sentiment, lấy random toàn bộ (trừ chính mình)
+    if not final_candidates:
+        logger.info("[MATCH] No candidates found by sentiment. Falling back to random.")
+        pipeline_fallback = [
+            {"$match": {"_id": {"$ne": oid}}},
+            {"$sample": {"size": limit}}
+        ]
+        logger.info(f"[MATCH DEBUG] Fallback Mongo Query: {pipeline_fallback}")
+        cursor = db.users.aggregate(pipeline_fallback)
+        final_candidates = await cursor.to_list(length=limit)
+
+    logger.info(f"[MATCH DEBUG] Matched users count: {len(final_candidates)}")
+
+    if not final_candidates:
+        return [] # Trả về mảng rỗng thay vì raise lỗi
+
+    results = []
+    for target in final_candidates:
+        match_res = await _create_match_doc(db, user_id, me["username"], target)
+        results.append(match_res)
+        
+    return results
+
+
+async def suggest_random(
+    db: AsyncIOMotorDatabase, user_id: str, limit: int = 10
+) -> list[MatchResponse]:
+    oid = ObjectId(user_id)
+    # TEMPORARY DEBUG: Chỉ exclude chính mình
+    match_filter = {"_id": {"$ne": oid}}
+
+    # Sử dụng aggregate $sample sẽ nhanh và ngẫu nhiên hơn find()
+    pipeline = [
+        {"$match": match_filter},
+        {"$sample": {"size": limit}}
+    ]
+    logger.info(f"[MATCH DEBUG] Random Suggester Query: {pipeline}")
     cursor = db.users.aggregate(pipeline)
     candidates = await cursor.to_list(length=limit)
+
+    logger.info(f"[MATCH DEBUG] Matched users count (random): {len(candidates)}")
+
+    if not candidates:
+        return []
+
+    me = await db.users.find_one({"_id": oid})
+    username = me["username"] if me else ""
     
     results = []
     for target in candidates:
-        results.append({
-            "_id": str(target["_id"]),
-            "username": target.get("username", ""),
-            "avatar_url": target.get("avatar_url"),
-            "bio": target.get("bio", ""),
-            "age": target.get("age"),
-            "gender": target.get("gender"),
-        })
-    return jsonable_encoder(results)
+        match_res = await _create_match_doc(db, user_id, username, target)
+        results.append(match_res)
+    return results
 
 
 async def accept_match(
-    db: AsyncIOMotorDatabase, target_user_id: str, user_id: str
-) -> dict:
+    db: AsyncIOMotorDatabase, match_id: str, user_id: str
+) -> MatchResponse:
     try:
-        target_oid = ObjectId(target_user_id)
-        user_oid = ObjectId(user_id)
+        oid = ObjectId(match_id)
     except Exception:
-        raise ValueError("Invalid ID format")
+        raise ValueError("Invalid match ID")
 
-    # 1. Kiểm tra xem người kia đã thích mình chưa (pending match where we are user2)
-    existing_other_like = await db.matches.find_one({
-        "user1_id": target_oid,
-        "user2_id": user_oid,
-        "status": MatchStatus.PENDING
-    })
+    doc = await db.matches.find_one({"_id": oid})
+    if not doc:
+        raise ValueError("Match not found")
+    if str(doc["user1_id"]) != user_id:
+        raise PermissionError("Not your match")
+    if doc["status"] != MatchStatus.PENDING:
+        raise ValueError(f"Match is already {doc['status']}")
 
-    if existing_other_like:
-        # Match cả 2 cùng thích -> ACCEPTED
-        updated = await db.matches.find_one_and_update(
-            {"_id": existing_other_like["_id"]},
-            {"$set": {"status": MatchStatus.ACCEPTED}},
-            return_document=True,
-        )
-        return _serialize_match(updated)
-
-    # 2. Kiểm tra xem mình đã thích người này chưa (tránh tạo trùng)
-    existing_my_like = await db.matches.find_one({ # This is a match initiated by current user
-        "user1_id": user_oid,
-        "user2_id": target_oid
-    })
-    if existing_my_like:
-        return _serialize_match(existing_my_like)
-
-    # 3. Thích lần đầu -> Tạo pending match doc
-    me = await db.users.find_one({"_id": user_oid})
-    target = await db.users.find_one({"_id": target_oid})
-    if not target:
-        raise ValueError("User not found")
-
-    # Create a new pending match
-    new_match_doc = await _create_match_doc(db, user_id, me.get("username", "user"), target)
-    # The _create_match_doc returns a dict that matches MatchResponse structure
-    return new_match_doc
+    updated = await db.matches.find_one_and_update(
+        {"_id": oid},
+        {"$set": {"status": MatchStatus.ACCEPTED}},
+        return_document=True,
+    )
+    return _serialize_match(updated)
 
 
 async def skip_match(
-    db: AsyncIOMotorDatabase, target_user_id: str, user_id: str
-) -> None: # Changed return type to None for 204 status code
+    db: AsyncIOMotorDatabase, match_id: str, user_id: str
+) -> None:
     try:
-        target_oid = ObjectId(target_user_id)
-        user_oid = ObjectId(user_id)
+        oid = ObjectId(match_id)
     except Exception:
-        raise ValueError("Invalid ID format")
+        raise ValueError("Invalid match ID")
 
-    # Check if a match already exists where current user is user1 and target is user2
-    existing_match = await db.matches.find_one({
-        "user1_id": user_oid,
-        "user2_id": target_oid
-    })
+    doc = await db.matches.find_one({"_id": oid})
+    if not doc:
+        raise ValueError("Match not found")
+    if str(doc["user1_id"]) != user_id:
+        raise PermissionError("Not your match")
 
-    if existing_match:
-        # If it's already accepted, we might want to unmatch instead of skip
-        # The user asked for "lưu skipped hoặc ignore". If it's accepted, we ignore skipping.
-        if existing_match["status"] == MatchStatus.ACCEPTED: # Cannot skip an accepted match
-            return
-        
-        # If it's pending or already skipped, update to skipped
-        await db.matches.find_one_and_update(
-            {"_id": existing_match["_id"]},
-            {"$set": {"status": MatchStatus.SKIPPED}},
-        )
-        return
-    else:
-        # No existing match, create a new 'skipped' match document
-        me = await db.users.find_one({"_id": user_oid})
-        target = await db.users.find_one({"_id": target_oid})
-        if not target:
-            raise ValueError("User not found")
-
-        # Create a new match document directly with skipped status
-        await db.matches.insert_one({
-            "user1_id": user_oid,
-            "user1_username": me.get("username", "user"),
-            "user2_id": target_oid,
-            "user2_username": target.get("username", "Người dùng"),
-            "user2_bio": target.get("bio", ""),
-            "user2_avatar_url": target.get("avatar_url", ""),
-            "user2_sentiment": target.get("sentiment_profile", ""),
-            "user2_gender": target.get("gender", ""),
-            "user2_age": target.get("age", 0),
-            "status": MatchStatus.SKIPPED,
-            "created_at": datetime.now(timezone.utc),
-        })
-        return
+    await db.matches.update_one(
+        {"_id": oid},
+        {"$set": {"status": MatchStatus.SKIPPED}},
+    )
 
 
 async def get_my_matches(
