@@ -18,7 +18,7 @@ from app.router.auth import router as auth_router
 from app.router.posts import router as posts_router
 from app.router.profile import router as profile_router
 from app.router.match import router as match_router
-from app.router.chat import router as chat_router
+import app.router.chat as chat
 from app.router.reactions import router as reactions_router
 from app.router.comments import router as comments_router
 from app.router.moderation import router as moderation_router
@@ -139,17 +139,18 @@ app.add_middleware(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",
+        "http://localhost:5173", # Frontend default
         "http://127.0.0.1:5173",
+        "http://127.0.0.1:8000",
         "http://localhost:3000",
-        "https://love-app-fe.vercel.app",
-        "https://love-app-be.onrender.com",
-        "https://love-app-igja.onrender.com" # Thêm domain backend Render của bạn
+        "http://127.0.0.1:3000",
+        "http://localhost:5174", # Vite alternative port
     ],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*", "Authorization", "Content-Type", "Accept"],
+    allow_headers=["*"],
 )
+
 
 
 @app.exception_handler(RequestValidationError)
@@ -191,8 +192,8 @@ app.include_router(moderation_router, prefix="/api")
 app.include_router(stories_router,    prefix="/api") # Sẽ tạo endpoint /api/stories
 app.include_router(emotion_match_router, prefix="/api")
 
-# Chat router: WebSocket path stays at /chat/ws/{match_id}
-app.include_router(chat_router)
+# Chat router: API and WebSocket endpoints
+app.include_router(chat.router)
 
 
 # ── Health check ──────────────────────────────────────────────

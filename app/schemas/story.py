@@ -20,7 +20,7 @@ class StoryResponse(BaseModel):
     user_id: str
     username: str
     avatar_url: Optional[str] = None
-    media_url: str
+    media_url: Optional[str] = None
     media_type: str = "image"
     text: Optional[str] = None
     viewers: List[StoryViewer] = []

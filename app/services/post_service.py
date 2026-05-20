@@ -15,7 +15,7 @@ async def ensure_post_indexes(db: AsyncIOMotorDatabase):
 
 
 def _serialize_post(doc: dict, my_reaction: str | None = None) -> PostResponse:
-    reactions_raw = doc.get("reactions", {})
+    reactions_raw = doc.get("reactions") or {}
     return PostResponse(
         id=str(doc["_id"]),
         user_id=str(doc["user_id"]),
@@ -24,7 +24,7 @@ def _serialize_post(doc: dict, my_reaction: str | None = None) -> PostResponse:
         age=doc.get("age"),
         gender=doc.get("gender"),
         content=doc["content"],
-        media_urls=doc.get("media_urls", []),
+        media_urls=doc.get("media_urls") or [],
         media_type=doc.get("media_type"),
         sentiment_score=doc.get("sentiment_score"),
         sentiment=doc.get("sentiment"), # Thêm trường sentiment mới vào response

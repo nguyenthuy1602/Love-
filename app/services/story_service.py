@@ -5,18 +5,18 @@ from app.schemas.story import StoryResponse, StoryViewer, StoryReaction
 
 def _serialize_story(doc: dict, current_user_id: str = "") -> StoryResponse:
     return StoryResponse(
-        id=str(doc["_id"]),
-        user_id=str(doc["user_id"]),
+        id=str(doc.get("_id", "")),
+        user_id=str(doc.get("user_id", "")),
         username=doc.get("username", "Người dùng"),
-        avatar_url=doc.get("avatar_url"),
-        media_url=doc["media_url"],
-        media_type=doc.get("media_type", "image"),
-        text=doc.get("text"),
-        viewers=[StoryViewer(**v) for v in doc.get("viewers", [])],
-        reactions=[StoryReaction(**r) for r in doc.get("reactions", [])],
-        created_at=doc["created_at"],
-        expires_at=doc["expires_at"],
-        is_mine=str(doc["user_id"]) == current_user_id
+        avatar_url=doc.get("avatar_url") or "",
+        media_url=doc.get("media_url") or "",
+        media_type=doc.get("media_type") or "",
+        text=doc.get("text") or "",
+        viewers=[StoryViewer(**v) for v in (doc.get("viewers") or [])],
+        reactions=[StoryReaction(**r) for r in (doc.get("reactions") or [])],
+        created_at=doc.get("created_at", datetime.now(timezone.utc)),
+        expires_at=doc.get("expires_at", datetime.now(timezone.utc)),
+        is_mine=str(doc.get("user_id", "")) == current_user_id
     )
 
 async def create_story(
@@ -24,8 +24,8 @@ async def create_story(
     user_id: str, 
     username: str, 
     avatar_url: str | None, 
-    media_url: str,
-    media_type: str,
+    media_url: str | None, # Changed to Optional
+    media_type: str | None, # Changed to Optional
     text: str | None = None
 ) -> StoryResponse:
     now = datetime.now(timezone.utc)

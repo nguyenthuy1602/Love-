@@ -25,3 +25,25 @@ class MatchResponse(BaseModel):
     partner_is_online: bool = False
     status: MatchStatus
     created_at: datetime
+
+
+class RandomMatchResponse(BaseModel):
+    id: str
+    username: str
+    avatar: Optional[str] = None
+    bio: Optional[str] = None
+
+
+# THÊM ĐOẠN NÀY
+# Updated DiscoverUserResponse as per user's request
+class DiscoverUserResponse(BaseModel):
+    id: str
+    username: str
+    avatar: Optional[str] = None
+    bio: Optional[str] = ""
+    age: Optional[int] = None
+    gender: Optional[str] = None
+
+
+class MatchRequest(BaseModel):
+    id: str # This 'id' will be the target_user_id

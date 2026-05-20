@@ -9,12 +9,16 @@ from fastapi import (
 )
 
 from bson import ObjectId
+import logging
+import traceback
+from fastapi.encoders import jsonable_encoder
 
 from app.core.deps import require_session_full
 from app.db.mongodb import get_database
 from app.services.story_service import create_story, get_active_stories
 from app.services.media_service import upload_media
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/stories", tags=["Stories"])
 
 
@@ -40,6 +44,41 @@ async def upload_story_media(
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+# =========================
+# Lấy danh sách stories
+# =========================
+@router.get("/", status_code=200)
+@router.get("", status_code=200)
+async def list_stories(
+    request: Request,
+    auth_data: tuple = Depends(require_session_full)
+):
+    user_id, _ = auth_data
+    db = get_database()
+
+    try:
+        # 1. Thêm debug log user đang truy cập
+        print(f"DEBUG: Fetching active stories for user: {user_id}")
+
+        stories = await get_active_stories(db, user_id)
+
+        # 3. In debug các dữ liệu trước khi return
+        print("stories count =", len(stories))
+        print("first story =", stories[0] if stories else None)
+
+        # Sử dụng jsonable_encoder để tránh lỗi 500 khi serialize list models (ObjectId, datetime)
+        # Đây là cách an toàn nhất để đảm bảo response trả về được JSON hợp lệ
+        return jsonable_encoder(stories)
+        
+    except Exception as e:
+        # 2. Thêm try/except bao quanh toàn bộ logic GET stories
+        print("❌ STORIES ERROR:", str(e))
+        traceback.print_exc() # In full traceback backend
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Lỗi hệ thống khi tải stories: {str(e)}"
+        )
 
 
 # =========================
@@ -76,30 +115,19 @@ async def create_new_story(
             avatar_url = user_doc.get("avatar_url")
 
     try:
+        # Ensure media_type is None if media_url is None
+        media_url_val = data.get("media_url")
+        media_type_val = data.get("media_type") if media_url_val else None # Pass None if no media_url
+
         return await create_story(
             db,
             user_id,
             username,
             avatar_url,
-            media_url=data.get("media_url"),
-            media_type=data.get("media_type", "image"),
+            media_url=media_url_val,
+            media_type=media_type_val,
             text=data.get("text")
         )
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-
-# =========================
-# Lấy danh sách stories
-# =========================
-@router.get("/", status_code=200)
-@router.get("", status_code=200)
-async def list_stories(
-    request: Request,
-    auth_data: tuple = Depends(require_session_full)
-):
-    user_id, _ = auth_data
-    db = get_database()
-
-    return await get_active_stories(db, user_id)

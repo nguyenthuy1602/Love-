@@ -1,4 +1,5 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Request, Query
+from datetime import datetime, timezone
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Request, Query, Depends
 from bson import ObjectId
 
 from app.core.deps import require_session
@@ -9,11 +10,11 @@ from app.services.chat_service import save_message, get_chat_history, verify_mat
 from app.services.notification_service import notify_new_message
 from app.middleware.user_rate_limit import message_limiter
 
-router = APIRouter(prefix="/chat", tags=["Chat"])
+router = APIRouter(prefix="/api/chat", tags=["Chat"])
 
 
 # ── WebSocket ─────────────────────────────────────────────────
-# URL: ws://localhost:8000/chat/ws/{match_id}
+# URL: ws://localhost:8000/api/chat/ws/{match_id}
 # Auth: user_id lấy từ cookie session (không dùng query param nữa)
 
 @router.websocket("/ws/{match_id}")
@@ -130,7 +131,7 @@ async def chat_history(
 
 
 # ── WebSocket: notification channel riêng ────────────────────
-# URL: ws://localhost:8000/chat/notifications
+# URL: ws://localhost:8000/api/chat/notifications
 # Dùng để nhận push notification khi không ở trong phòng chat
 
 @router.websocket("/notifications")
@@ -155,3 +156,66 @@ async def notification_channel(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.unregister_notification(user_id)
         manager.mark_offline(user_id)
+
+
+# ── Chat trực tiếp không cần Match ───────────────────────────
+
+@router.post("/start/{target_user_id}")
+async def start_chat(
+    target_user_id: str,
+    current_user: str = Depends(require_session)
+):
+    """
+    Tạo hoặc lấy cuộc trò chuyện giữa người dùng hiện tại và người được chọn.
+    """
+    db = get_database()
+    try:
+        user_oid = ObjectId(current_user)
+        target_oid = ObjectId(target_user_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="ID người dùng không hợp lệ")
+
+    if current_user == target_user_id:
+        raise HTTPException(status_code=400, detail="Bạn không thể nhắn tin cho chính mình")
+
+    # 1. Kiểm tra đã có cuộc trò chuyện chưa (bất kể trạng thái nào)
+    match_doc = await db.matches.find_one({
+        "$or": [
+            {"user1_id": user_oid, "user2_id": target_oid},
+            {"user1_id": target_oid, "user2_id": user_oid}
+        ]
+    })
+
+    if match_doc:
+        # Nếu đã có match nhưng chưa được chấp nhận, cập nhật thành accepted để có thể chat
+        if match_doc.get("status") != "accepted":
+            await db.matches.update_one(
+                {"_id": match_doc["_id"]},
+                {"$set": {"status": "accepted"}}
+            )
+        match_id = str(match_doc["_id"])
+    else:
+        # 2. Nếu chưa có thì tạo mới cuộc trò chuyện với trạng thái accepted
+        me = await db.users.find_one({"_id": user_oid})
+        target = await db.users.find_one({"_id": target_oid})
+        
+        if not target:
+            raise HTTPException(status_code=404, detail="Người dùng không tồn tại")
+
+        new_match = {
+            "user1_id": user_oid,
+            "user1_username": me.get("username", "user"),
+            "user2_id": target_oid,
+            "user2_username": target.get("username", "Người dùng"),
+            "user2_avatar_url": target.get("avatar_url"),
+            "status": "accepted",
+            "created_at": datetime.now(timezone.utc),
+        }
+        result = await db.matches.insert_one(new_match)
+        match_id = str(result.inserted_id)
+
+    return {
+        "success": True,
+        "match_id": match_id,
+        "target_user_id": target_user_id
+    }

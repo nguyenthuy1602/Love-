@@ -1,12 +1,16 @@
 from fastapi import APIRouter, HTTPException, Request, Body, UploadFile, File, Form, Depends
 from fastapi.encoders import jsonable_encoder
 from bson import ObjectId
+from typing import List
+import logging
+import traceback
 
 from app.core.deps import require_session_full
 from app.db.mongodb import get_database
 from app.services.story_service import create_story, get_active_stories
 from app.services.media_service import upload_media
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/stories", tags=["Stories"])
 
 
@@ -72,10 +76,18 @@ async def create_new_story(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/", status_code=200)
+@router.get("/", response_model=List[dict], status_code=200)
 @router.get("", status_code=200)
 async def list_stories(request: Request, auth_data: tuple = Depends(require_session_full)): # Requirement 3
     user_id, _ = auth_data
     db = get_database()
-    result = await get_active_stories(db, user_id)
-    return jsonable_encoder(result)
+    try:
+        result = await get_active_stories(db, user_id)
+        return jsonable_encoder(result)
+    except Exception as e:
+        logger.error(f"Error serializing stories for user {user_id}: {e}", exc_info=True)
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Lỗi hệ thống khi tải stories: {str(e)}"
+        )
